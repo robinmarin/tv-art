@@ -14,7 +14,7 @@ python3 -m venv .venv
 ## Use
 
 ```
-TV_IP=192.168.1.50 .venv/bin/python serve.py
+.venv/bin/python serve.py
 ```
 
 Open http://localhost:8000, then drop, paste or pick an image. Choose a mode:
@@ -23,17 +23,13 @@ Open http://localhost:8000, then drop, paste or pick an image. Choose a mode:
 - **Fit, blurred background** shows the whole image over a blurred copy of itself.
 - **Fit, solid background** shows the whole image on a colour you pick.
 
-The zoom slider tightens the framing. **Send to TV** uploads the image with no matte and puts it on screen. The first send shows an Allow prompt on the TV. Accept it with the remote and the token lands in `tv-token.txt`, so later sends don't ask again.
+The zoom slider tightens the framing.
+
+The TV field lists the Frames on your network. When the page loads, the server asks every address on your subnet for Samsung's TV info (port 8001, `/api/v2/`) and keeps the ones that report `FrameTVSupport`. That takes about a second. Pick one, or type an IP if yours isn't listed, for example because it sits outside your /24. The page remembers your choice. Hit Rescan if the TV was off when the page loaded.
+
+**Send to TV** uploads the image with no matte and puts it on screen. The first send shows an Allow prompt on the TV. Accept it with the remote and the TV remembers the approval, so later sends don't ask again. A log under the controls shows each step as it happens. Storing a 4K image takes the TV a few seconds.
 
 Without the server you can open `index.html` directly. Only the download button works that way. Upload the file with the SmartThings app or a USB stick.
-
-To find the TV's IP, look in its network settings, or scan your subnet for the art API:
-
-```
-for i in $(seq 1 254); do (curl -s -m 1 http://192.168.1.$i:8001/api/v2/ | grep -q FrameTVSupport && echo 192.168.1.$i) & done; wait
-```
-
-Give the TV a DHCP reservation on your router so the address stays the same.
 
 ## Caveats
 

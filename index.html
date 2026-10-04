@@ -8,6 +8,8 @@
   #drop { display: block; border: 2px dashed #555; border-radius: 6px; padding: 24px; text-align: center; cursor: pointer; }
   #drop.over { border-color: #4af; }
   .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 12px 0; }
+  #busy { width: 120px; }
+  #log { background: #000; color: #9c9; font: 12px ui-monospace, monospace; padding: 8px 10px; border-radius: 4px; margin: 0 0 12px; max-height: 10em; overflow: auto; white-space: pre-wrap; }
   canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 4px; cursor: grab; touch-action: none; }
 </style>
 
@@ -26,9 +28,16 @@
   <input type="color" id="bg" value="#000000" hidden aria-label="Background colour">
   <label>Zoom <input type="range" id="zoom" min="1" max="3" step="0.01" value="1"></label>
   <button id="save" disabled>Download 3840×2160 JPEG</button>
-  <button id="send" disabled hidden>Send to TV</button>
+  <span id="tvctl" hidden>
+    <label>TV <input id="tv" list="tvs" size="15" placeholder="Scanning…"></label>
+    <datalist id="tvs"></datalist>
+    <button id="rescan">Rescan</button>
+    <button id="send" disabled>Send to TV</button>
+  </span>
+  <progress id="busy" hidden></progress>
   <span id="status"></span>
 </div>
+<pre id="log" hidden></pre>
 <canvas id="c" width="3840" height="2160"></canvas>
 
 <script>
@@ -100,18 +109,64 @@ addEventListener('dragleave', () => $('drop').classList.remove('over'));
 addEventListener('drop', e => { e.preventDefault(); $('drop').classList.remove('over'); load(e.dataTransfer.files[0]); });
 
 // Send only works when the page is served by serve.py.
-$('send').hidden = location.protocol === 'file:';
-$('send').onclick = () => c.toBlob(async b => {
-  $('send').disabled = true;
-  $('status').textContent = 'Sending to TV…';
+// TV controls only work when the page is served by serve.py.
+$('tvctl').hidden = location.protocol === 'file:';
+
+async function scan() {
+  $('tv').placeholder = 'Scanning…';
   try {
-    const r = await fetch('/send', { method: 'POST', body: b });
-    $('status').textContent = r.ok ? 'On the TV' : `TV error: ${await r.text()}`;
+    const tvs = await (await fetch('/tvs')).json();
+    $('tvs').replaceChildren(...tvs.map(t => new Option(t.name, t.ip)));
+    if (!$('tv').value && tvs.length) $('tv').value = tvs[0].ip;
+    $('tv').placeholder = tvs.length ? 'TV IP' : 'None found, type IP';
   } catch {
-    $('status').textContent = 'Server not reachable';
+    $('tv').placeholder = 'TV IP';
   }
+}
+if (location.protocol !== 'file:') {
+  try { $('tv').value = localStorage.getItem('tv') || ''; } catch {}
+  scan();
+}
+$('rescan').onclick = scan;
+$('tv').onchange = () => { try { localStorage.setItem('tv', $('tv').value.trim()); } catch {} };
+
+// The server streams one line per step and ends with DONE or ERROR.
+$('send').onclick = async () => {
+  const tv = $('tv').value.trim();
+  if (!tv) { $('status').textContent = 'Pick a TV first'; return; }
+  const t0 = performance.now();
+  const secs = () => ((performance.now() - t0) / 1000).toFixed(1);
+  const log = msg => {
+    $('log').textContent += `+${secs()}s  ${msg}\n`;
+    $('log').scrollTop = $('log').scrollHeight;
+  };
+  $('send').disabled = true;
+  $('busy').hidden = $('log').hidden = false;
+  $('log').textContent = '';
+  const tick = setInterval(() => $('status').textContent = `Sending… ${Math.floor(secs())}s`, 250);
+
+  let last = '';
+  try {
+    log('Encoding JPEG');
+    const b = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
+    log(`Sending ${(b.size / 1e6).toFixed(1)} MB to the local server`);
+    const r = await fetch(`/send?tv=${encodeURIComponent(tv)}`, { method: 'POST', body: b });
+    if (!r.ok) throw new Error(await r.text());
+    const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buf = '';
+    for (let chunk; !(chunk = await reader.read()).done;) {
+      const lines = (buf + chunk.value).split('\n');
+      buf = lines.pop();
+      for (const line of lines) log(last = line);
+    }
+  } catch (e) {
+    log(last = `ERROR ${e.message}`);
+  }
+  clearInterval(tick);
+  $('status').textContent = last === 'DONE' ? `On the TV after ${secs()}s` : 'Send failed, see log';
+  $('busy').hidden = true;
   $('send').disabled = false;
-}, 'image/jpeg', 0.92);
+};
 
 $('save').onclick = () => c.toBlob(b => {
   const a = document.createElement('a');
