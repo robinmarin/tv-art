@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Frame Art</title>
+<style>
+  body { font: 15px system-ui; margin: 0 auto; padding: 16px; max-width: 1100px; background: #111; color: #eee; }
+  #drop { display: block; border: 2px dashed #555; border-radius: 6px; padding: 24px; text-align: center; cursor: pointer; }
+  #drop.over { border-color: #4af; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 12px 0; }
+  canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 4px; cursor: grab; touch-action: none; }
+</style>
+
+<h1>Frame Art</h1>
+<label id="drop">Drop an image here, paste one, or click to choose
+  <input type="file" id="file" accept="image/*" hidden>
+</label>
+<div class="row">
+  <label>Mode
+    <select id="mode">
+      <option value="crop">Crop to fill (drag to move)</option>
+      <option value="blur">Fit, blurred background</option>
+      <option value="color">Fit, solid background</option>
+    </select>
+  </label>
+  <input type="color" id="bg" value="#000000" hidden aria-label="Background colour">
+  <label>Zoom <input type="range" id="zoom" min="1" max="3" step="0.01" value="1"></label>
+  <button id="save" disabled>Download 3840×2160 JPEG</button>
+  <button id="send" disabled hidden>Send to TV</button>
+  <span id="status"></span>
+</div>
+<canvas id="c" width="3840" height="2160"></canvas>
+
+<script>
+// Samsung Frame art mode: 3840x2160 (16:9), JPEG, under 20 MB.
+const W = 3840, H = 2160;
+const $ = id => document.getElementById(id);
+const c = $('c'), ctx = c.getContext('2d');
+let img, name = 'image', fx = .5, fy = .5, scale = 1;
+
+async function load(f) {
+  if (!f || !f.type.startsWith('image/')) return;
+  try {
+    img = await createImageBitmap(f);
+  } catch {
+    $('status').textContent = `Can't read ${f.name} in this browser`;
+    return;
+  }
+  name = f.name.replace(/\.[^.]+$/, '') || 'image';
+  fx = fy = .5;
+  $('zoom').value = 1;
+  $('save').disabled = $('send').disabled = false;
+  $('status').textContent = `${img.width}×${img.height}`;
+  draw();
+}
+
+// fx/fy in [0,1] pick which part of an oversized image is shown (0 = left/top edge).
+function drawAt(s, x, y) {
+  const w = img.width * s, h = img.height * s;
+  ctx.drawImage(img, (W - w) * x, (H - h) * y, w, h);
+}
+
+function draw() {
+  if (!img) return;
+  const m = $('mode').value;
+  const cover = Math.max(W / img.width, H / img.height);
+  const contain = Math.min(W / img.width, H / img.height);
+  ctx.filter = 'none';
+  ctx.fillStyle = m === 'color' ? $('bg').value : '#000';
+  ctx.fillRect(0, 0, W, H);
+  if (m === 'blur') {
+    ctx.filter = 'blur(80px) brightness(0.7)';
+    drawAt(cover * 1.15, .5, .5);
+    ctx.filter = 'none';
+  }
+  scale = (m === 'crop' ? cover : contain) * $('zoom').value;
+  drawAt(scale, fx, fy);
+}
+
+c.addEventListener('pointerdown', e => {
+  if (!img) return;
+  c.setPointerCapture(e.pointerId);
+  const k = W / c.clientWidth; // CSS px -> canvas px
+  const move = ev => {
+    const slackX = W - img.width * scale, slackY = H - img.height * scale;
+    if (slackX) fx = Math.min(1, Math.max(0, fx + ev.movementX * k / slackX));
+    if (slackY) fy = Math.min(1, Math.max(0, fy + ev.movementY * k / slackY));
+    draw();
+  };
+  c.addEventListener('pointermove', move);
+  c.addEventListener('pointerup', () => c.removeEventListener('pointermove', move), { once: true });
+});
+
+$('mode').onchange = () => { $('bg').hidden = $('mode').value !== 'color'; draw(); };
+$('bg').oninput = $('zoom').oninput = draw;
+$('file').onchange = e => load(e.target.files[0]);
+addEventListener('paste', e => load(e.clipboardData.files[0]));
+addEventListener('dragover', e => { e.preventDefault(); $('drop').classList.add('over'); });
+addEventListener('dragleave', () => $('drop').classList.remove('over'));
+addEventListener('drop', e => { e.preventDefault(); $('drop').classList.remove('over'); load(e.dataTransfer.files[0]); });
+
+// Send only works when the page is served by serve.py.
+$('send').hidden = location.protocol === 'file:';
+$('send').onclick = () => c.toBlob(async b => {
+  $('send').disabled = true;
+  $('status').textContent = 'Sending to TV…';
+  try {
+    const r = await fetch('/send', { method: 'POST', body: b });
+    $('status').textContent = r.ok ? 'On the TV' : `TV error: ${await r.text()}`;
+  } catch {
+    $('status').textContent = 'Server not reachable';
+  }
+  $('send').disabled = false;
+}, 'image/jpeg', 0.92);
+
+$('save').onclick = () => c.toBlob(b => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(b);
+  a.download = `${name}_frame.jpg`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}, 'image/jpeg', 0.92);
+</script>
